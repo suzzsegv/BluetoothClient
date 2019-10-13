@@ -8,10 +8,8 @@ import android.bluetooth.BluetoothManager;
 import android.bluetooth.le.BluetoothLeScanner;
 import android.bluetooth.le.ScanCallback;
 import android.bluetooth.le.ScanResult;
-import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.os.Handler;
 import android.support.annotation.NonNull;
@@ -21,16 +19,17 @@ import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
+import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.ListView;
+import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.ArrayList;
 import java.util.List;
 
-import static java.lang.Boolean.FALSE;
-
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends AppCompatActivity implements AdapterView.OnItemClickListener {
 
     private BluetoothAdapter mBluetoothAdapter;
     private BluetoothLeScanner mBluetoothLeScanner;
@@ -38,6 +37,10 @@ public class MainActivity extends AppCompatActivity {
     final int REQUEST_DISCOVERABLE_BT = 2;
     final int REQUEST_PERMISSION = 1000;
     ListView listView;
+    TextView textView_DeviceName;
+    TextView textView_DeviceAddress;
+    ArrayList<BluetoothDevice> mBluetoothDeviceList;
+    ArrayList<String> mDeviceNameList;
     ArrayAdapter<String> mArrayAdapter;
     private ScanCallback mScanCallback;
 
@@ -62,18 +65,7 @@ public class MainActivity extends AppCompatActivity {
             startActivityForResult(enableBtIntent, REQUEST_ENABLE_BT);
         }
 
-        // mBluetoothLeScannerの初期化
         mBluetoothLeScanner = mBluetoothAdapter.getBluetoothLeScanner();
-
-        // Register for broadcasts when a device is discovered
-//        IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_FOUND);
-//        this.registerReceiver(mReceiver, filter);
-
-//        mBluetoothAdapter.startDiscovery();
-        // Register for broadcasts when discovery has finished
-//        filter = new IntentFilter(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
-//        this.registerReceiver(mReceiver, filter);
-
         mScanCallback = new ScanCallback() {
             @Override
             public void onScanResult(int callbackType, ScanResult result) {
@@ -82,7 +74,12 @@ public class MainActivity extends AppCompatActivity {
                 BluetoothDevice bluetoothDevice = result.getDevice();
                 Log.d(MainActivity.class.getName(), "address:" + bluetoothDevice.getAddress());
                 Log.d(MainActivity.class.getName(), "name:" + bluetoothDevice.getName());
-                mArrayAdapter.add(bluetoothDevice.getName() + "\n" + bluetoothDevice.getAddress());
+                Log.d(MainActivity.class.getName(), "type:" + bluetoothDevice.getType());
+                String nameAndAddress = bluetoothDevice.getName() + "\n" + bluetoothDevice.getAddress();
+                if( !mDeviceNameList.contains(nameAndAddress)){
+                    mArrayAdapter.add(nameAndAddress);
+                    mBluetoothDeviceList.add(bluetoothDevice);
+                }
             }
 
             @Override
@@ -98,13 +95,21 @@ public class MainActivity extends AppCompatActivity {
             }
         };
 
-        Button b = (Button) findViewById(R.id.button);
+        textView_DeviceName = findViewById(R.id.textView_DeviceName);
+        textView_DeviceName.setText("Nothing");
+
+        textView_DeviceAddress = findViewById(R.id.textView_DeviceAddress);
+        textView_DeviceAddress.setText("00:00:00:00:00:00");
+
+        mBluetoothDeviceList = new ArrayList<>();
+
+        Button b = (Button) findViewById(R.id.Button);
         b.setOnClickListener(new View.OnClickListener() {
             private Handler handler;
-            private final int SCAN_PERIOD = 30000;
+            private final int SCAN_PERIOD = 20000;
             @Override
             public void onClick(View view) {
-                //スキャニングを30秒後に停止
+                //スキャニングを15秒後に停止
                 handler = new Handler();
                 handler.postDelayed(new Runnable() {
                     @Override
@@ -118,8 +123,10 @@ public class MainActivity extends AppCompatActivity {
         });
 
         listView = (ListView)findViewById(R.id.ListView1);
-        mArrayAdapter = new ArrayAdapter<String>(this, android.R.layout.simple_list_item_1);
+        mDeviceNameList = new ArrayList<>();
+        mArrayAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, mDeviceNameList);
         listView.setAdapter(mArrayAdapter);
+        listView.setOnItemClickListener(this);
     }
 
     // 位置情報許可の確認
@@ -171,48 +178,60 @@ public class MainActivity extends AppCompatActivity {
             case REQUEST_ENABLE_BT:
                 if (resultCode == Activity.RESULT_CANCELED) {
                     Toast.makeText(this, "Bluetooth を使用できません。", Toast.LENGTH_LONG).show();
-                    finish();
+                    // finish();
                     return;
                 }
                 if (mBluetoothAdapter.getScanMode() != BluetoothAdapter.SCAN_MODE_CONNECTABLE_DISCOVERABLE) {
                     Intent discoverableIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE);
-                    discoverableIntent.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 90);
+                    discoverableIntent.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 30);
                     startActivityForResult(discoverableIntent, REQUEST_DISCOVERABLE_BT);
                 }
                 break;
             case REQUEST_DISCOVERABLE_BT:
                 if (resultCode == Activity.RESULT_CANCELED) {
-                    Toast.makeText(this, "Bluetooth 機器を検出できません。", Toast.LENGTH_LONG).show();
-                    finish();
+                    Toast.makeText(this, "他の Bluetooth デバイスに、この携帯電話は表示されません。", Toast.LENGTH_LONG).show();
+                    // finish();
                     return;
                 }
-                Toast.makeText(this, "Bluetooth 機器の検出を開始します。", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "他の Bluetooth デバイスに表示可能です", Toast.LENGTH_LONG).show();
         }
         super.onActivityResult(requestCode, resultCode, data);
     }
 
     // Create a BroadcastReceiver for ACTION_FOUND
-    private final BroadcastReceiver mReceiver = new BroadcastReceiver() {
-        public void onReceive(Context context, Intent intent) {
-            String action = intent.getAction();
-
-            // When discovery finds a device
-            if (BluetoothDevice.ACTION_FOUND.equals(action)) {
-                // Get the BluetoothDevice object from the Intent
-                BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
-                // Add the name and address to an array adapter to show in a ListView
-                mArrayAdapter.add(device.getName() + "\n" + device.getAddress());
-            } else if (BluetoothAdapter.ACTION_DISCOVERY_FINISHED.equals(action)) {
-                Toast.makeText(context, "Bluetooth 機器が見つかりませんでした。", Toast.LENGTH_LONG).show();
-            }
-        }
-    };
+//    private final BroadcastReceiver mReceiver = new BroadcastReceiver() {
+//        public void onReceive(Context context, Intent intent) {
+//            String action = intent.getAction();
+//
+//            // When discovery finds a device
+//            if (BluetoothDevice.ACTION_FOUND.equals(action)) {
+//                // Get the BluetoothDevice object from the Intent
+//                BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+//                // Add the name and address to an array adapter to show in a ListView
+//                String nameAndAddress = device.getName() + "\n" + device.getAddress();
+//                if( !mDeviceNameList.contains(nameAndAddress)){
+//                    mArrayAdapter.add(nameAndAddress);
+//                }
+//            } else if (BluetoothAdapter.ACTION_DISCOVERY_FINISHED.equals(action)) {
+//            Toast.makeText(context, "Bluetooth 機器が見つかりませんでした。", Toast.LENGTH_LONG).show();
+//            }
+//        }
+//    };
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
 
         // Don't forget to unregister the ACTION_FOUND receiver.
-        unregisterReceiver(mReceiver);
+//        unregisterReceiver(mReceiver);
+    }
+
+    @Override
+    public void onItemClick( AdapterView<?> parent, View view, int position, long id ) {
+        String msg = position + "番目のアイテムがクリックされました";
+        Toast.makeText(getApplicationContext(), msg, Toast.LENGTH_LONG).show();
+        BluetoothDevice btDev = mBluetoothDeviceList.get(position);
+        textView_DeviceName.setText(btDev.getName());
+        textView_DeviceAddress.setText(btDev.getAddress());
     }
 }
