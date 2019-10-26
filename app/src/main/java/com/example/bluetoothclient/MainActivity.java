@@ -5,6 +5,8 @@ import android.app.Activity;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
+import android.bluetooth.BluetoothServerSocket;
+import android.bluetooth.BluetoothSocket;
 import android.bluetooth.le.BluetoothLeScanner;
 import android.bluetooth.le.ScanCallback;
 import android.bluetooth.le.ScanResult;
@@ -26,8 +28,13 @@ import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 public class MainActivity extends AppCompatActivity implements AdapterView.OnItemClickListener {
 
@@ -44,6 +51,10 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     ArrayAdapter<String> mArrayAdapter;
     private ScanCallback mScanCallback;
 
+    BTServerThread btServerThread;
+    BTClientThread btClientThread;
+    BluetoothDevice mServerBluetoothDevice;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -52,7 +63,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         checkPermission();
 
         BluetoothManager bluetoothManager =
-                (BluetoothManager)getSystemService(Context.BLUETOOTH_SERVICE);
+                (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
         mBluetoothAdapter = bluetoothManager.getAdapter();
         if (mBluetoothAdapter == null) {
             // Device does not support Bluetooth
@@ -63,6 +74,12 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         if (!mBluetoothAdapter.isEnabled()) {
             Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
             startActivityForResult(enableBtIntent, REQUEST_ENABLE_BT);
+        } else {
+            if (mBluetoothAdapter.getScanMode() != BluetoothAdapter.SCAN_MODE_CONNECTABLE_DISCOVERABLE) {
+                Intent discoverableIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE);
+                discoverableIntent.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 60);
+                startActivityForResult(discoverableIntent, REQUEST_DISCOVERABLE_BT);
+            }
         }
 
         mBluetoothLeScanner = mBluetoothAdapter.getBluetoothLeScanner();
@@ -76,7 +93,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                 Log.d(MainActivity.class.getName(), "name:" + bluetoothDevice.getName());
                 Log.d(MainActivity.class.getName(), "type:" + bluetoothDevice.getType());
                 String nameAndAddress = bluetoothDevice.getName() + "\n" + bluetoothDevice.getAddress();
-                if( !mDeviceNameList.contains(nameAndAddress)){
+                if (!mDeviceNameList.contains(nameAndAddress)) {
                     mArrayAdapter.add(nameAndAddress);
                     mBluetoothDeviceList.add(bluetoothDevice);
                 }
@@ -107,6 +124,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         b.setOnClickListener(new View.OnClickListener() {
             private Handler handler;
             private final int SCAN_PERIOD = 20000;
+
             @Override
             public void onClick(View view) {
                 //スキャニングを15秒後に停止
@@ -122,7 +140,18 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             }
         });
 
-        listView = (ListView)findViewById(R.id.ListView1);
+        Button connectButton = (Button) findViewById(R.id.Button_Connect);
+        connectButton.setOnClickListener(new View.OnClickListener() {
+             @Override
+             public void onClick(View view) {
+                 if(mServerBluetoothDevice != null) {
+                     btClientThread = new BTClientThread();
+                     btClientThread.start();
+                 }
+             }
+        });
+
+        listView = (ListView) findViewById(R.id.ListView1);
         mDeviceNameList = new ArrayList<>();
         mArrayAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, mDeviceNameList);
         listView.setAdapter(mArrayAdapter);
@@ -134,11 +163,11 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         // 既に許可している
         if (ContextCompat.checkSelfPermission(this,
                 Manifest.permission.ACCESS_FINE_LOCATION)
-                == PackageManager.PERMISSION_GRANTED){
+                == PackageManager.PERMISSION_GRANTED) {
             Toast.makeText(this, "ACCESS_FINE_LOCATION は許可されています。", Toast.LENGTH_LONG).show();
         }
         // 許可されていない場合
-        else{
+        else {
             requestLocationPermission();
         }
     }
@@ -183,7 +212,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                 }
                 if (mBluetoothAdapter.getScanMode() != BluetoothAdapter.SCAN_MODE_CONNECTABLE_DISCOVERABLE) {
                     Intent discoverableIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE);
-                    discoverableIntent.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 30);
+                    discoverableIntent.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 60);
                     startActivityForResult(discoverableIntent, REQUEST_DISCOVERABLE_BT);
                 }
                 break;
@@ -198,25 +227,21 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         super.onActivityResult(requestCode, resultCode, data);
     }
 
-    // Create a BroadcastReceiver for ACTION_FOUND
-//    private final BroadcastReceiver mReceiver = new BroadcastReceiver() {
-//        public void onReceive(Context context, Intent intent) {
-//            String action = intent.getAction();
-//
-//            // When discovery finds a device
-//            if (BluetoothDevice.ACTION_FOUND.equals(action)) {
-//                // Get the BluetoothDevice object from the Intent
-//                BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
-//                // Add the name and address to an array adapter to show in a ListView
-//                String nameAndAddress = device.getName() + "\n" + device.getAddress();
-//                if( !mDeviceNameList.contains(nameAndAddress)){
-//                    mArrayAdapter.add(nameAndAddress);
-//                }
-//            } else if (BluetoothAdapter.ACTION_DISCOVERY_FINISHED.equals(action)) {
-//            Toast.makeText(context, "Bluetooth 機器が見つかりませんでした。", Toast.LENGTH_LONG).show();
-//            }
-//        }
-//    };
+    @Override
+    protected void onResume() {
+        super.onResume();
+
+        if (mBluetoothAdapter == null) {
+            return;
+        }
+
+        if(btServerThread == null){
+//          btServerThread.cancel();
+//          btServerThread = null;
+            btServerThread = new BTServerThread();
+            btServerThread.start();
+        }
+    }
 
     @Override
     protected void onDestroy() {
@@ -227,11 +252,205 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     }
 
     @Override
-    public void onItemClick( AdapterView<?> parent, View view, int position, long id ) {
-        String msg = position + "番目のアイテムがクリックされました";
-        Toast.makeText(getApplicationContext(), msg, Toast.LENGTH_LONG).show();
+    public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
+        //String msg = position + "番目のアイテムがクリックされました";
+        //Toast.makeText(getApplicationContext(), msg, Toast.LENGTH_LONG).show();
         BluetoothDevice btDev = mBluetoothDeviceList.get(position);
         textView_DeviceName.setText(btDev.getName());
         textView_DeviceAddress.setText(btDev.getAddress());
+        mServerBluetoothDevice = btDev;
+    }
+
+    public class BTServerThread extends Thread {
+        static final String TAG = "BTTest1Server";
+        static final String BT_NAME = "BTTEST1";
+        UUID BT_UUID = UUID.fromString(
+                "41eb5f39-6c3a-4067-8bb9-bad64e6e0908");
+
+        BluetoothServerSocket bluetoothServerSocket;
+        BluetoothSocket bluetoothSocket;
+        InputStream inputStream;
+        OutputStream outputStream;
+
+        public void run() {
+
+            byte[] incomingBuff = new byte[64];
+
+            try {
+                while (true) {
+
+                    if (Thread.interrupted()) {
+                        break;
+                    }
+
+                    try {
+
+                        bluetoothServerSocket
+                                = mBluetoothAdapter.listenUsingInsecureRfcommWithServiceRecord(
+                                BT_NAME,
+                                BT_UUID);
+
+                        bluetoothSocket = bluetoothServerSocket.accept();
+                        bluetoothServerSocket.close();
+                        bluetoothServerSocket = null;
+
+                        inputStream = bluetoothSocket.getInputStream();
+                        outputStream = bluetoothSocket.getOutputStream();
+
+                        while (true) {
+
+                            if (Thread.interrupted()) {
+                                break;
+                            }
+
+                            int incomingBytes = inputStream.read(incomingBuff);
+                            byte[] buff = new byte[incomingBytes];
+                            System.arraycopy(incomingBuff, 0, buff, 0, incomingBytes);
+                            //String cmd = new String(buff, StandardCharsets.UTF_8);
+
+                            //String resp = processCommand(cmd);
+                            //outputStream.write(resp.getBytes());
+                        }
+
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+
+                    if (bluetoothSocket != null) {
+                        try {
+                            bluetoothSocket.close();
+                            bluetoothSocket = null;
+                        } catch (IOException e) {
+                        }
+                    }
+
+                    // Bluetooth connection broke. Start Over in a few seconds.
+                    Thread.sleep(3 * 1000);
+                }
+            } catch (InterruptedException e) {
+                Log.d(TAG, "Cancelled ServerThread");
+            }
+
+            Log.d(TAG, "ServerThread exit");
+        }
+
+        public void cancel() {
+            if (bluetoothServerSocket != null) {
+                try {
+                    bluetoothServerSocket.close();
+                    bluetoothServerSocket = null;
+                    super.interrupt();
+                } catch (IOException e) {}
+            }
+        }
+    }
+
+    public class BTClientThread extends Thread {
+        static final String TAG = "BTTest1Client";
+        UUID BT_UUID = UUID.fromString(
+                "41eb5f39-6c3a-4067-8bb9-bad64e6e0908");
+        InputStream inputStream;
+        OutputStream outputStrem;
+        BluetoothSocket bluetoothSocket;
+
+        public void run() {
+
+            byte[] incomingBuff = new byte[64];
+
+            BluetoothDevice bluetoothDevice = mServerBluetoothDevice;
+//            Set<BluetoothDevice> devices = bluetoothAdapter.getBondedDevices();
+//            for(BluetoothDevice device : devices){
+//                if(device.getName().equals(Constants.BT_DEVICE)) {
+//                    bluetoothDevice = device;
+//                    break;
+//                }
+//            }
+
+            if(bluetoothDevice == null){
+                Log.d(TAG, "No device found.");
+                return;
+            }
+
+            try {
+
+                bluetoothSocket = bluetoothDevice.createRfcommSocketToServiceRecord(
+                        BT_UUID);
+
+                while(true) {
+
+                    if(Thread.interrupted()){
+                        break;
+                    }
+
+                    try {
+                        bluetoothSocket.connect();
+
+//                        handler.obtainMessage(
+//                                Constants.MESSAGE_BT,
+//                                "CONNECTED " + bluetoothDevice.getName())
+//                                .sendToTarget();
+
+                        inputStream = bluetoothSocket.getInputStream();
+                        outputStrem = bluetoothSocket.getOutputStream();
+
+                        while (true) {
+
+                            if (Thread.interrupted()) {
+                                break;
+                            }
+
+                            // Send Command
+                            String command = "GET:TEMP";
+                            outputStrem.write(command.getBytes());
+                            // Read Response
+                            int incomingBytes = inputStream.read(incomingBuff);
+                            byte[] buff = new byte[incomingBytes];
+                            System.arraycopy(incomingBuff, 0, buff, 0, incomingBytes);
+                            String s = new String(buff, StandardCharsets.UTF_8);
+
+                            // Show Result to UI
+//                            handler.obtainMessage(
+//                                    Constants.MESSAGE_TEMP,
+//                                    s)
+//                                    .sendToTarget();
+
+                            // Update again in a few seconds
+                            Thread.sleep(3000);
+                        }
+
+                    } catch (IOException e) {
+                        // connect will throw IOException immediately
+                        // when it's disconnected.
+                        Log.d(TAG, e.getMessage());
+                    }
+
+//                    handler.obtainMessage(
+//                            Constants.MESSAGE_BT,
+//                            "DISCONNECTED")
+//                            .sendToTarget();
+
+                    // Re-try after 3 sec
+                    Thread.sleep(3 * 1000);
+                }
+
+            }catch (InterruptedException e){
+                e.printStackTrace();
+            }
+            catch (IOException e) {
+                e.printStackTrace();
+            }
+
+            if(bluetoothSocket != null){
+                try {
+                    bluetoothSocket.close();
+                } catch (IOException e) {}
+                bluetoothSocket = null;
+            }
+
+//            handler.obtainMessage(
+//                    Constants.MESSAGE_BT,
+//                    "DISCONNECTED - Exit BTClientThread")
+//                    .sendToTarget();
+        }
     }
 }
