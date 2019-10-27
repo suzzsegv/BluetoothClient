@@ -9,11 +9,11 @@ import android.bluetooth.BluetoothServerSocket;
 import android.bluetooth.BluetoothSocket;
 import android.bluetooth.le.BluetoothLeScanner;
 import android.bluetooth.le.ScanCallback;
-import android.bluetooth.le.ScanResult;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Handler;
+import android.os.Looper;
 import android.support.annotation.NonNull;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
@@ -33,7 +33,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 public class MainActivity extends AppCompatActivity implements AdapterView.OnItemClickListener {
@@ -46,6 +46,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     ListView listView;
     TextView textView_DeviceName;
     TextView textView_DeviceAddress;
+    TextView textView_Status;
     ArrayList<BluetoothDevice> mBluetoothDeviceList;
     ArrayList<String> mDeviceNameList;
     ArrayAdapter<String> mArrayAdapter;
@@ -55,10 +56,15 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     BTClientThread btClientThread;
     BluetoothDevice mServerBluetoothDevice;
 
+    Handler mUiHandler;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+        textView_Status = findViewById(R.id.textView_Status);
+        textView_Status.setText("Status:");
 
         checkPermission();
 
@@ -68,6 +74,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         if (mBluetoothAdapter == null) {
             // Device does not support Bluetooth
             Log.d(MainActivity.class.getName(), "Device does not support Bluetooth");
+            textView_Status.setText("Status: Device does not support Bluetooth.");
             return;
         }
 
@@ -82,36 +89,6 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             }
         }
 
-        mBluetoothLeScanner = mBluetoothAdapter.getBluetoothLeScanner();
-        mScanCallback = new ScanCallback() {
-            @Override
-            public void onScanResult(int callbackType, ScanResult result) {
-                super.onScanResult(callbackType, result);
-                Log.d(MainActivity.class.getName(), "callbackType = " + callbackType);
-                BluetoothDevice bluetoothDevice = result.getDevice();
-                Log.d(MainActivity.class.getName(), "address:" + bluetoothDevice.getAddress());
-                Log.d(MainActivity.class.getName(), "name:" + bluetoothDevice.getName());
-                Log.d(MainActivity.class.getName(), "type:" + bluetoothDevice.getType());
-                String nameAndAddress = bluetoothDevice.getName() + "\n" + bluetoothDevice.getAddress();
-                if (!mDeviceNameList.contains(nameAndAddress)) {
-                    mArrayAdapter.add(nameAndAddress);
-                    mBluetoothDeviceList.add(bluetoothDevice);
-                }
-            }
-
-            @Override
-            public void onBatchScanResults(List<ScanResult> results) {
-                super.onBatchScanResults(results);
-                Log.d(MainActivity.class.getName(), "onBatchScanResults()");
-            }
-
-            @Override
-            public void onScanFailed(int errorCode) {
-                super.onScanFailed(errorCode);
-                Log.d(MainActivity.class.getName(), "onScanFailed()");
-            }
-        };
-
         textView_DeviceName = findViewById(R.id.textView_DeviceName);
         textView_DeviceName.setText("Nothing");
 
@@ -120,23 +97,45 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
         mBluetoothDeviceList = new ArrayList<>();
 
-        Button b = (Button) findViewById(R.id.Button);
+        listView = (ListView) findViewById(R.id.ListView1);
+        mDeviceNameList = new ArrayList<>();
+        mArrayAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, mDeviceNameList);
+        listView.setAdapter(mArrayAdapter);
+        listView.setOnItemClickListener(this);
+
+        // Get a set of currently paired devices
+        Set<BluetoothDevice> pairedDevices = mBluetoothAdapter.getBondedDevices();
+
+        // If there are paired devices, add each one to the ArrayAdapter
+        if (pairedDevices.size() > 0) {
+            for (BluetoothDevice bluetoothDevice : pairedDevices) {
+                String nameAndAddress = bluetoothDevice.getName() + "\n" + bluetoothDevice.getAddress();
+                mArrayAdapter.add(nameAndAddress);
+                mBluetoothDeviceList.add(bluetoothDevice);
+            }
+        }
+
+        Button b = (Button) findViewById(R.id.Button_Listen);
         b.setOnClickListener(new View.OnClickListener() {
             private Handler handler;
             private final int SCAN_PERIOD = 20000;
 
             @Override
             public void onClick(View view) {
-                //スキャニングを15秒後に停止
-                handler = new Handler();
-                handler.postDelayed(new Runnable() {
-                    @Override
-                    public void run() {
-                        mBluetoothLeScanner.stopScan(mScanCallback);
-                    }
-                }, SCAN_PERIOD);
-                //スキャンの開始
-                mBluetoothLeScanner.startScan(mScanCallback);
+                if(mServerBluetoothDevice != null) {
+                    btServerThread = new BTServerThread();
+                    btServerThread.start();
+                }
+//                //スキャニングを15秒後に停止
+//                handler = new Handler();
+//                handler.postDelayed(new Runnable() {
+//                    @Override
+//                    public void run() {
+//                        mBluetoothLeScanner.stopScan(mScanCallback);
+//                    }
+//                }, SCAN_PERIOD);
+//                //スキャンの開始
+//                mBluetoothLeScanner.startScan(mScanCallback);
             }
         });
 
@@ -151,11 +150,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
              }
         });
 
-        listView = (ListView) findViewById(R.id.ListView1);
-        mDeviceNameList = new ArrayList<>();
-        mArrayAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, mDeviceNameList);
-        listView.setAdapter(mArrayAdapter);
-        listView.setOnItemClickListener(this);
+        mUiHandler = new Handler(Looper.getMainLooper());
+
     }
 
     // 位置情報許可の確認
@@ -291,6 +287,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                                 BT_UUID);
 
                         bluetoothSocket = bluetoothServerSocket.accept();
+                        setStatusTextView("Status: クライアントが接続しました。");
+
                         bluetoothServerSocket.close();
                         bluetoothServerSocket = null;
 
@@ -306,6 +304,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                             int incomingBytes = inputStream.read(incomingBuff);
                             byte[] buff = new byte[incomingBytes];
                             System.arraycopy(incomingBuff, 0, buff, 0, incomingBytes);
+                            processBtCommand();
                             //String cmd = new String(buff, StandardCharsets.UTF_8);
 
                             //String resp = processCommand(cmd);
@@ -342,6 +341,24 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                     super.interrupt();
                 } catch (IOException e) {}
             }
+        }
+
+        private void processBtCommand(){
+            mUiHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    textView_Status.setText("Status: コマンドを受信しました。");
+                }
+            });
+        }
+
+        private void setStatusTextView(final String str){
+            mUiHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    textView_Status.setText(str);
+                }
+            });
         }
     }
 
